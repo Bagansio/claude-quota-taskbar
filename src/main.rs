@@ -53,6 +53,8 @@ mod app {
     static TASKBAR_LEFT: AtomicI32 = AtomicI32::new(0);
     static SCALE_BITS: AtomicU32 = AtomicU32::new(0);
     static HEIGHT: AtomicI32 = AtomicI32::new(48);
+    /// True when embedded as a child of the taskbar window (follows its z-order and visibility).
+    static IS_CHILD: AtomicBool = AtomicBool::new(false);
     static HWND_RAW: AtomicUsize = AtomicUsize::new(0);
     /// Broadcast by Explorer after it (re)starts; the taskbar window is new and we must re-place ourselves.
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
@@ -109,8 +111,15 @@ mod app {
         let h = tb.bottom - tb.top;
         HEIGHT.store(h, Relaxed);
         TASKBAR_LEFT.store(tb.left, Relaxed);
-        let x = tb.left + load_offset().unwrap_or((190.0 * scale()) as i32);
-        SetWindowPos(hwnd, HWND_TOPMOST, x, tb.top, render::width(scale()), h, SWP_NOACTIVATE);
+        let offset = load_offset().unwrap_or((190.0 * scale()) as i32);
+        let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+        if IS_CHILD.load(Relaxed) && !tray.is_null() {
+            // Explorer may have created a new taskbar window: re-attach.
+            SetParent(hwnd, tray);
+            SetWindowPos(hwnd, HWND_TOP, offset, 0, render::width(scale()), h, SWP_NOACTIVATE);
+        } else {
+            SetWindowPos(hwnd, HWND_TOPMOST, tb.left + offset, tb.top, render::width(scale()), h, SWP_NOACTIVATE);
+        }
         InvalidateRect(hwnd, null(), 0);
     }
 
@@ -127,7 +136,17 @@ mod app {
             let h = tb.bottom - tb.top;
             HEIGHT.store(h, Relaxed);
             TASKBAR_LEFT.store(tb.left, Relaxed);
-            let x = tb.left + load_offset().unwrap_or((190.0 * scale()) as i32);
+            let offset = load_offset().unwrap_or((190.0 * scale()) as i32);
+            // Preferably a child of the taskbar itself, so Start, flyouts and full-screen apps cover it
+            // like any other taskbar content. Falls back to a topmost popup if there is no taskbar window.
+            let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+            let child = !tray.is_null();
+            IS_CHILD.store(child, Relaxed);
+            let (style, ex, x, y, parent) = if child {
+                (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, WS_EX_LAYERED | WS_EX_NOACTIVATE, offset, 0, tray)
+            } else {
+                (WS_POPUP, WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, tb.left + offset, tb.top, null_mut())
+            };
 
             let hinst = GetModuleHandleW(null());
             let class = wide("ClaudeQuotaTaskbar");
@@ -140,15 +159,15 @@ mod app {
             RegisterClassExW(&wc);
 
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+                ex,
                 class.as_ptr(),
                 wide("Claude usage").as_ptr(),
-                WS_POPUP,
+                style,
                 x,
-                tb.top,
+                y,
                 render::width(scale()),
                 h,
-                null_mut(),
+                parent,
                 null_mut(),
                 hinst,
                 null(),
@@ -222,8 +241,15 @@ mod app {
                 if wp == TIMER_REPAINT {
                     InvalidateRect(hwnd, null(), 0);
                 } else {
-                    // Only fight the taskbar for the top spot (it jumps above us when it takes focus);
-                    // leave other topmost windows, e.g. screenshot overlays, alone.
+                    if IS_CHILD.load(Relaxed) {
+                        // The taskbar's XAML layer is a sibling that can rise above us: stay on top of it.
+                        if !GetWindow(hwnd, GW_HWNDPREV).is_null() {
+                            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                        }
+                        return 0;
+                    }
+                    // Popup fallback: only fight the taskbar for the top spot; leave other topmost
+                    // windows, e.g. screenshot overlays, alone.
                     let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
                     if !tray.is_null() && taskbar_above(hwnd, tray) {
                         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -242,10 +268,16 @@ mod app {
             }
             WM_MOUSEMOVE => {
                 if DRAGGING.load(Relaxed) {
-                    let (mut pt, mut r) = (zeroed::<POINT>(), zeroed::<RECT>());
+                    let mut pt = zeroed::<POINT>();
                     GetCursorPos(&mut pt);
-                    GetWindowRect(hwnd, &mut r);
-                    SetWindowPos(hwnd, null_mut(), pt.x - DRAG_DX.load(Relaxed), r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    let sx = pt.x - DRAG_DX.load(Relaxed);
+                    if IS_CHILD.load(Relaxed) {
+                        SetWindowPos(hwnd, null_mut(), sx - TASKBAR_LEFT.load(Relaxed), 0, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    } else {
+                        let mut r = zeroed::<RECT>();
+                        GetWindowRect(hwnd, &mut r);
+                        SetWindowPos(hwnd, null_mut(), sx, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
                 }
                 0
             }

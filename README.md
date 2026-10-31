@@ -72,7 +72,7 @@ cargo test --target x86_64-unknown-linux-gnu   # parsing, time maths, formatting
 | `src/state.rs` | State shared between fetch thread and UI |
 | `src/main.rs` | Window, drag, menu, timers, fetch loop |
 
-The window is a borderless, layered, always-on-top tool window sized to the taskbar. Its background is a colour key, so only the bars and text show. Windows has no API for third-party taskbar widgets, so it re-asserts topmost every 5 seconds.
+The widget is a borderless layered child window of the taskbar itself (Shell_TrayWnd), so Start, flyouts and full-screen apps cover it like any other taskbar content. Its background is a colour key, so only the bars and text show. Layered child windows need the embedded manifest (app.manifest). If no taskbar window is found it falls back to a topmost popup. Windows has no official API for third-party taskbar widgets.
 
 ## License
 
