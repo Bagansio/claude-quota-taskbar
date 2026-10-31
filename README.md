@@ -1,62 +1,79 @@
 # claude-quota-taskbar
 
-Shows your Claude plan usage (5-hour session and weekly) on the Windows 11 taskbar, next to the Widgets/weather button: a colored dot plus two lines of text.
+Your Claude plan usage, drawn directly on the Windows 11 taskbar, next to the Widgets/weather button.
 
 ```
-●  Session 10%  ·  3h12m
-   Weekly 1%    ·  4d2h
+|  5h  ▮▮▮▮▯▯▯▯▯▯  36% · 3h
+|  7d  ▮▮▯▯▯▯▯▯▯▯  23% · 3d
 ```
 
-The dot goes orange, then amber at 70% and red at 90%.
-
-Also included: `claude_quota_tray.py`, a system-tray alternative that shows the session % on the icon and details on hover.
-
-## How it works
-
-It reads the OAuth token that Claude Code stores in `%USERPROFILE%\.claude\.credentials.json` and calls Anthropic's usage endpoint (`https://api.anthropic.com/api/oauth/usage`) every 3 minutes. Nothing is written or sent anywhere else, and the token is never refreshed or modified. The repo contains no secrets.
-
-> The endpoint is undocumented and may change or rate-limit you (HTTP 429). The widget keeps retrying on its own.
-
-## Requirements
-
-- Windows 11
-- [Claude Code](https://claude.com/claude-code) installed and logged in (a Pro/Max subscription)
-- Python 3.10+ with tkinter (the standard python.org installer includes it)
+- `5h` is the rolling 5-hour session limit, `7d` the weekly limit.
+- Each bar has 10 segments. The text shows the percentage used and the time until reset.
+- The fill turns amber at 70% and red at 90%. The left rail turns amber while the latest refresh is failing; the last good numbers stay on screen.
+- Single ~330 KB `.exe`, no runtime, no console window.
 
 ## Install
+
+### Prebuilt
+Download `claude-quota-taskbar.exe` from [Releases](../../releases) (or the latest CI artifact) and run it.
+
+### Build from source
+On Windows with [Rust](https://rustup.rs) (MSVC toolchain):
 
 ```powershell
 git clone https://github.com/Bagansio/claude-quota-taskbar.git
 cd claude-quota-taskbar
-wscript start.vbs
+cargo build --release
+.\target\release\claude-quota-taskbar.exe
 ```
 
-The widget appears at the left of the taskbar. Drag it horizontally to place it where you want (the position is saved to `pos.json`). Right-click for **Refresh now** / **Quit**.
+Cross-compiling from Linux/WSL (needs `mingw64-gcc` and `rustup target add x86_64-pc-windows-gnu`):
+
+```sh
+cargo build --release --target x86_64-pc-windows-gnu
+```
 
 ### Start at login
+Press `Win+R`, run `shell:startup`, and put a shortcut to the `.exe` in that folder.
 
-Press `Win+R`, run `shell:startup`, and put a shortcut to `start.vbs` in that folder.
+## Usage
 
-### Tray version instead
+- **Drag** it horizontally to place it anywhere along the taskbar. The position is saved in `%APPDATA%\claude-quota-taskbar\offset`.
+- **Right-click** for *Refresh now* and *Quit*.
+- Only one instance runs at a time.
 
-```powershell
-pip install -r requirements-tray.txt
-pythonw claude_quota_tray.py
-```
+## Requirements
 
-New tray icons are hidden under the `^` arrow; drag it onto the taskbar to pin it.
+- Windows 11
+- [Claude Code](https://claude.com/claude-code) installed and logged in with a Pro/Max subscription. The widget reads the OAuth token Claude Code keeps in `%USERPROFILE%\.claude\.credentials.json`. It never writes or refreshes it, and it contacts only `api.anthropic.com`.
+
+> It uses Anthropic's undocumented `/api/oauth/usage` endpoint, which can change or rate-limit you. It polls every 3 minutes (5 minutes after an HTTP 429).
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Message | Meaning |
 |---|---|
-| "Token expired" | Run any Claude Code command; it renews the token. |
-| "HTTP 429" / "Rate limited" | Wait a few minutes; avoid restarting the widget repeatedly. |
-| Nothing visible | Run `python claude_quota_bar.py` in a terminal to see errors. Check `python -c "import tkinter"`. |
-| Overlaps other icons | Drag it, or edit the default offset in `claude_quota_bar.py`. |
+| `token expired, run claude` | Run any Claude Code command; it renews the token and the widget recovers on its own. |
+| `rate limited, retrying` | Too many requests; it backs off automatically. Avoid restarting the app repeatedly. |
+| `Claude Code not logged in` | Log in with `claude` first. |
+| Nothing visible | Another window may cover that part of the taskbar; drag the widget (the rail is the handle) or check Task Manager for the process. |
 
-## Notes
+## Development
 
-Windows does not let third-party apps add to the real Widgets button, so this is a borderless, transparent always-on-top window sized to the taskbar. It re-asserts itself on top every few seconds. If you use a light taskbar theme, change `FG`/`MUT` at the top of `claude_quota_bar.py`.
+```sh
+cargo test --target x86_64-unknown-linux-gnu   # parsing, time maths, formatting (platform independent)
+```
 
-MIT licensed.
+| File | Role |
+|---|---|
+| `src/model.rs` | Pure logic and unit tests: payload parsing, RFC 3339, formatting, segment fills |
+| `src/api.rs` | WinHTTP client (system TLS and proxy; no HTTP crate) |
+| `src/render.rs` | GDI drawing and layout |
+| `src/state.rs` | State shared between fetch thread and UI |
+| `src/main.rs` | Window, drag, menu, timers, fetch loop |
+
+The window is a borderless, layered, always-on-top tool window sized to the taskbar. Its background is a colour key, so only the bars and text show. Windows has no API for third-party taskbar widgets, so it re-asserts topmost every 5 seconds.
+
+## License
+
+MIT
