@@ -54,6 +54,8 @@ mod app {
     static SCALE_BITS: AtomicU32 = AtomicU32::new(0);
     static HEIGHT: AtomicI32 = AtomicI32::new(48);
     static HWND_RAW: AtomicUsize = AtomicUsize::new(0);
+    /// Broadcast by Explorer after it (re)starts; the taskbar window is new and we must re-place ourselves.
+    static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
     fn scale() -> f32 {
         f32::from_bits(SCALE_BITS.load(Relaxed))
@@ -78,6 +80,28 @@ mod app {
         }
     }
 
+    /// Rectangle of the primary taskbar (falls back to the bottom 48 px of the screen).
+    unsafe fn taskbar_rect() -> RECT {
+        let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+        let mut tb = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if tray.is_null() || GetWindowRect(tray, &mut tb) == 0 {
+            let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+            tb = RECT { left: 0, top: sh - (48.0 * scale()) as i32, right: sw, bottom: sh };
+        }
+        tb
+    }
+
+    /// Re-anchor to the (possibly new) taskbar, keeping the user's horizontal offset.
+    unsafe fn reposition(hwnd: HWND) {
+        let tb = taskbar_rect();
+        let h = tb.bottom - tb.top;
+        HEIGHT.store(h, Relaxed);
+        TASKBAR_LEFT.store(tb.left, Relaxed);
+        let x = tb.left + load_offset().unwrap_or((190.0 * scale()) as i32);
+        SetWindowPos(hwnd, HWND_TOPMOST, x, tb.top, render::width(scale()), h, SWP_NOACTIVATE);
+        InvalidateRect(hwnd, null(), 0);
+    }
+
     pub fn run() {
         unsafe {
             let mutex = CreateMutexW(null(), 0, wide("Local\\claude-quota-taskbar").as_ptr());
@@ -87,13 +111,7 @@ mod app {
             SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             SCALE_BITS.store((GetDpiForSystem() as f32 / 96.0).to_bits(), Relaxed);
 
-            // Sit inside the primary taskbar.
-            let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
-            let mut tb = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-            if tray.is_null() || GetWindowRect(tray, &mut tb) == 0 {
-                let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-                tb = RECT { left: 0, top: sh - (48.0 * scale()) as i32, right: sw, bottom: sh };
-            }
+            let tb = taskbar_rect();
             let h = tb.bottom - tb.top;
             HEIGHT.store(h, Relaxed);
             TASKBAR_LEFT.store(tb.left, Relaxed);
@@ -130,7 +148,8 @@ mod app {
             SetLayeredWindowAttributes(hwnd, render::KEY, 0, LWA_COLORKEY);
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             SetTimer(hwnd, TIMER_REPAINT, 30_000, None);
-            SetTimer(hwnd, TIMER_TOPMOST, 5_000, None);
+            SetTimer(hwnd, TIMER_TOPMOST, 250, None);
+            TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), Relaxed);
 
             std::thread::spawn(fetch_loop);
 
@@ -191,7 +210,12 @@ mod app {
                 if wp == TIMER_REPAINT {
                     InvalidateRect(hwnd, null(), 0);
                 } else {
-                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    // Only fight the taskbar for the top spot (it jumps above us when it takes focus);
+                    // leave other topmost windows, e.g. screenshot overlays, alone.
+                    let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+                    if !tray.is_null() && GetWindow(hwnd, GW_HWNDPREV) == tray {
+                        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    }
                 }
                 0
             }
@@ -245,6 +269,14 @@ mod app {
             }
             WM_DESTROY => {
                 PostQuitMessage(0);
+                0
+            }
+            WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+                reposition(hwnd);
+                0
+            }
+            m if m == TASKBAR_CREATED.load(Relaxed) && m != 0 => {
+                reposition(hwnd);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
