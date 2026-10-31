@@ -91,6 +91,18 @@ mod app {
         tb
     }
 
+    /// Is the taskbar anywhere above us in the z-order? (Other windows may sit in between.)
+    unsafe fn taskbar_above(hwnd: HWND, tray: HWND) -> bool {
+        let mut w = GetWindow(hwnd, GW_HWNDPREV);
+        while !w.is_null() {
+            if w == tray {
+                return true;
+            }
+            w = GetWindow(w, GW_HWNDPREV);
+        }
+        false
+    }
+
     /// Re-anchor to the (possibly new) taskbar, keeping the user's horizontal offset.
     unsafe fn reposition(hwnd: HWND) {
         let tb = taskbar_rect();
@@ -213,7 +225,7 @@ mod app {
                     // Only fight the taskbar for the top spot (it jumps above us when it takes focus);
                     // leave other topmost windows, e.g. screenshot overlays, alone.
                     let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
-                    if !tray.is_null() && GetWindow(hwnd, GW_HWNDPREV) == tray {
+                    if !tray.is_null() && taskbar_above(hwnd, tray) {
                         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     }
                 }
