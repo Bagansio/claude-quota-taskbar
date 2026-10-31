@@ -1,0 +1,5 @@
+pos.json
+__pycache__/
+*.pyc
+*.png
+err.txt
