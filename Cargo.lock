@@ -19,12 +19,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "claude-quota-taskbar"
-version = "0.1.0"
+name = "claude-quota-core"
+version = "0.2.0"
 dependencies = [
- "embed-resource",
  "serde_json",
+]
+
+[[package]]
+name = "claude-quota-taskbar"
+version = "0.2.0"
+dependencies = [
+ "claude-quota-core",
+ "embed-resource",
  "windows-sys",
+]
+
+[[package]]
+name = "claude-quota-waybar"
+version = "0.2.0"
+dependencies = [
+ "claude-quota-core",
+ "serde_json",
 ]
 
 [[package]]

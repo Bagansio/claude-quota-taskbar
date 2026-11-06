@@ -1,0 +1,10 @@
+[package]
+name = "claude-quota-core"
+description = "Platform-independent Claude plan usage logic: credentials, payload parsing, formatting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true

@@ -2,8 +2,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #![cfg_attr(not(windows), allow(dead_code))]
 
-mod model;
-
 #[cfg(windows)]
 mod api;
 #[cfg(windows)]
@@ -18,17 +16,19 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("claude-quota-taskbar only runs on Windows");
+    eprintln!("claude-quota-taskbar only runs on Windows; on Linux use claude-quota-waybar");
 }
 
 #[cfg(windows)]
 mod app {
-    use crate::api::{self, wide, FetchError};
+    use crate::api::{self, wide};
     use crate::{render, state};
+    use claude_quota_core::fetch::next_poll_secs;
+    use claude_quota_core::{now_secs, MIN_MANUAL_REFRESH_SECS};
     use std::mem::zeroed;
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering::Relaxed};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::Graphics::Gdi::*;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -42,10 +42,6 @@ mod app {
     const TIMER_TOPMOST: usize = 2;
     const CMD_REFRESH: usize = 1;
     const CMD_QUIT: usize = 2;
-    /// Poll gently: the endpoint is undocumented and rate-limits aggressively.
-    const POLL_OK: u64 = 180;
-    const POLL_RATE_LIMITED: u64 = 300;
-    const POLL_RETRY: u64 = 60;
 
     static REFRESH: AtomicBool = AtomicBool::new(false);
     static DRAGGING: AtomicBool = AtomicBool::new(false);
@@ -61,10 +57,6 @@ mod app {
 
     fn scale() -> f32 {
         f32::from_bits(SCALE_BITS.load(Relaxed))
-    }
-
-    fn now_secs() -> i64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
     }
 
     fn offset_file() -> Option<std::path::PathBuf> {
@@ -198,25 +190,23 @@ mod app {
             let started = Instant::now();
             let wait = {
                 let r = api::fetch_usage();
+                let wait = next_poll_secs(&r);
                 let mut s = state::STATE.lock().unwrap();
                 match r {
                     Ok(u) => {
                         s.usage = Some(u);
                         s.error = None;
-                        POLL_OK
                     }
-                    Err(e) => {
-                        s.error = Some(e.message());
-                        if matches!(e, FetchError::RateLimited) { POLL_RATE_LIMITED } else { POLL_RETRY }
-                    }
+                    Err(e) => s.error = Some(e.message()),
                 }
+                wait
             };
             unsafe { PostMessageW(hwnd as HWND, WM_UPDATED, 0, 0) };
             // Sleep, waking early for a manual refresh (at most one per 15 s).
             loop {
                 std::thread::sleep(Duration::from_millis(500));
                 let age = started.elapsed();
-                if age >= Duration::from_secs(wait) || (REFRESH.swap(false, Relaxed) && age >= Duration::from_secs(15)) {
+                if age >= Duration::from_secs(wait) || (REFRESH.swap(false, Relaxed) && age >= Duration::from_secs(MIN_MANUAL_REFRESH_SECS)) {
                     break;
                 }
             }

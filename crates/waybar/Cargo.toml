@@ -1,0 +1,11 @@
+[package]
+name = "claude-quota-waybar"
+description = "Claude plan usage (5h / 7d) as a Waybar module for Hyprland and other Wayland compositors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+claude-quota-core.workspace = true
+serde_json.workspace = true

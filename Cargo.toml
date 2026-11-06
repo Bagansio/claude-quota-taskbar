@@ -1,29 +1,16 @@
-[package]
-name = "claude-quota-taskbar"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/windows", "crates/waybar"]
+
+[workspace.package]
+version = "0.2.0"
 edition = "2021"
-description = "Claude plan usage (5h / 7d) embedded in the Windows 11 taskbar"
 license = "MIT"
+repository = "https://github.com/Bagansio/claude-quota-taskbar"
 
-[build-dependencies]
-embed-resource = "3"
-
-[dependencies]
+[workspace.dependencies]
+claude-quota-core = { path = "crates/core" }
 serde_json = "1"
-
-[target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.59"
-features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_Networking_WinHttp",
-  "Win32_Security",
-  "Win32_System_LibraryLoader",
-  "Win32_System_Threading",
-  "Win32_UI_HiDpi",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_UI_WindowsAndMessaging",
-]
 
 [profile.release]
 opt-level = "s"

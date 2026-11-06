@@ -7,7 +7,7 @@
 //! The background is the colour key of the layered window, so only the glyphs are visible.
 
 use crate::api::wide;
-use crate::model::{self, Level, Limit, SEGMENTS};
+use claude_quota_core::model::{self, Level, Limit, SEGMENTS};
 use crate::state::Snapshot;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;

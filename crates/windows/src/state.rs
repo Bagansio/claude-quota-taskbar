@@ -1,6 +1,6 @@
 //! State shared between the fetch thread and the UI thread.
 
-use crate::model::Usage;
+use claude_quota_core::model::Usage;
 use std::sync::Mutex;
 
 #[derive(Clone, Default)]
