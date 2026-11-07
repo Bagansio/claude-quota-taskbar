@@ -84,6 +84,7 @@ The bar shows `5h ■■■■□□□□□□ 36% · 3h   7d ■■□□□�
 |---|---|
 | *(none)* | Run continuously and print a new JSON line whenever the readout changes. |
 | `--compact` | Percentages and reset times only, without the segment bars. |
+| `--slim` | Narrow `▮▯` bars and a dimmed reset time without the `·` separator, for crowded bars. |
 | `--plain` | No Pango colours, so you can style it entirely through CSS classes. |
 | `--once` | Print one line and exit, for `"interval"`-style modules. |
 | `--refresh` | Ask running instances to refetch now. Use it as `on-click`; it runs at most once every 15 s. |

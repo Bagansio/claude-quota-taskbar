@@ -16,6 +16,9 @@ pub struct Style {
     pub compact: bool,
     /// No Pango colours, ■ filled / □ empty; style everything from CSS instead.
     pub plain: bool,
+    /// Narrow bar glyphs and a dimmed reset time, for crowded bars:
+    /// `5h ▮▮▮▯▯▯▯▯▯▯ 36% 3h` (reset time dimmed).
+    pub slim: bool,
 }
 
 const ORANGE: &str = "#e8845c";
@@ -56,7 +59,8 @@ fn bar(l: &Limit, style: Style) -> String {
     // Whole segments only: a text cell can't be half filled.
     let filled = model::segment_fills(l.percent).iter().filter(|f| **f >= 0.5).count();
     let empty = model::SEGMENTS - filled;
-    let (on, off) = ("■".repeat(filled), if style.plain { "□" } else { "■" }.repeat(empty));
+    let (full, hollow) = if style.slim { ("▮", "▯") } else { ("■", "□") };
+    let (on, off) = (full.repeat(filled), if style.plain { hollow } else { full }.repeat(empty));
     format!("{}{}", span(fill_color(model::level(l.percent)), &on, style.plain), span(EMPTY, &off, style.plain))
 }
 
@@ -67,7 +71,13 @@ fn row(label: &str, l: &Limit, now: i64, style: Style) -> String {
         s.push_str(&bar(l, style));
     }
     s.push(' ');
-    s.push_str(&escape(&model::format_limit(l, now)));
+    match (style.slim, l.resets_at) {
+        (true, Some(t)) => {
+            s.push_str(&format!("{:.0}% ", l.percent));
+            s.push_str(&span(LABEL, &escape(&model::format_remaining(t - now)), style.plain));
+        }
+        _ => s.push_str(&escape(&model::format_limit(l, now))),
+    }
     s
 }
 
@@ -90,7 +100,8 @@ pub fn render(shared: Option<&Shared>, now: i64, style: Style) -> String {
         return line(&format!("Claude: {msg}"), &format!("<b>Claude usage</b>\n{msg}"), &[class], 0);
     };
 
-    let text = format!("{}   {}", row("5h", &u.session, now, style), row("7d", &u.weekly, now, style));
+    let gap = if style.slim { "  " } else { "   " };
+    let text = format!("{}{gap}{}", row("5h", &u.session, now, style), row("7d", &u.weekly, now, style));
     let mut tip = format!(
         "<b>Claude usage</b>\n<tt>{}\n{}</tt>\nupdated {} ago",
         tooltip_row("5h session", &u.session, now),
@@ -139,7 +150,7 @@ mod tests {
 
     #[test]
     fn plain_compact() {
-        let v = parse(&render(Some(&shared(36.0, 23.0, None)), 1060, Style { compact: true, plain: true }));
+        let v = parse(&render(Some(&shared(36.0, 23.0, None)), 1060, Style { compact: true, plain: true, ..Style::default() }));
         assert_eq!(v["text"], "5h 36% · 3h   7d 23% · 2d");
         assert_eq!(v["class"], json!(["ok"]));
         assert_eq!(v["percentage"], 36);
@@ -147,7 +158,7 @@ mod tests {
 
     #[test]
     fn plain_bars() {
-        let v = parse(&render(Some(&shared(36.0, 95.0, None)), 1000, Style { compact: false, plain: true }));
+        let v = parse(&render(Some(&shared(36.0, 95.0, None)), 1000, Style { compact: false, plain: true, ..Style::default() }));
         assert_eq!(v["text"], "5h ■■■■□□□□□□ 36% · 3h   7d ■■■■■■■■■■ 95% · 3d");
         assert_eq!(v["class"], json!(["critical"]));
         assert_eq!(v["percentage"], 95);
@@ -162,6 +173,17 @@ mod tests {
         assert_eq!(v["class"], json!(["warn", "stale"]));
         assert!(v["tooltip"].as_str().unwrap().contains("offline &lt;x&gt;"));
         assert!(v["tooltip"].as_str().unwrap().contains("resets in 3h 10m"));
+    }
+
+    #[test]
+    fn slim() {
+        let st = Style { slim: true, ..Style::default() };
+        let v = parse(&render(Some(&shared(36.0, 23.0, None)), 1000, st));
+        let text = v["text"].as_str().unwrap();
+        assert!(text.contains("▮▮▮▮</span>"), "{text}");
+        assert!(text.contains(&format!("36% <span color='{LABEL}'>3h</span>")), "{text}");
+        let v = parse(&render(Some(&shared(36.0, 23.0, None)), 1000, Style { plain: true, ..st }));
+        assert_eq!(v["text"], "5h ▮▮▮▮▯▯▯▯▯▯ 36% 3h  7d ▮▮▯▯▯▯▯▯▯▯ 23% 3d");
     }
 
     #[test]

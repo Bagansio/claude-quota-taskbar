@@ -18,12 +18,13 @@ use std::io::Write;
 use std::time::Duration;
 
 const USAGE: &str = "\
-usage: claude-quota-waybar [--once | --refresh] [--compact] [--plain]
+usage: claude-quota-waybar [--once | --refresh] [--compact] [--slim] [--plain]
 
   (default)   run continuously for a Waybar custom module (\"return-type\": \"json\")
   --once      print a single JSON line and exit
   --refresh   ask running instances to refetch now (use as on-click)
   --compact   percentages and reset times only, no segment bars
+  --slim      narrow bars and a dimmed reset time, for crowded bars
   --plain     no Pango colours; style the module from CSS classes instead";
 
 fn is_due(cur: Option<&Shared>, now: i64, woke_at: Option<i64>) -> bool {
@@ -70,6 +71,7 @@ fn main() {
             "--refresh" => refresh = true,
             "--compact" => style.compact = true,
             "--plain" => style.plain = true,
+            "--slim" => style.slim = true,
             "-V" | "--version" => return println!("claude-quota-waybar {}", env!("CARGO_PKG_VERSION")),
             "-h" | "--help" => return println!("{USAGE}"),
             _ => {
