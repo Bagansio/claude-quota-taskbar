@@ -4,7 +4,7 @@
 //! settings come from the system and no HTTP crate is needed.
 
 use crate::model::{self, Usage};
-use crate::{POLL_OK_SECS, POLL_RATE_LIMITED_SECS, POLL_RETRY_SECS};
+use crate::{POLL_OK_SECS, POLL_RATE_LIMITED_SECS, POLL_RETRY_SECS, WAKE_RETRY_SECS, WAKE_WINDOW_SECS};
 use std::path::PathBuf;
 
 pub const HOST: &str = "api.anthropic.com";
@@ -28,11 +28,14 @@ impl FetchError {
     }
 }
 
-/// Seconds to wait before the next poll after this outcome.
-pub fn next_poll_secs(r: &Result<Usage, FetchError>) -> u64 {
+/// Seconds to wait before the next poll after this outcome. `since_wake` is how long ago the
+/// machine resumed or the session was unlocked, if known.
+pub fn next_poll_secs(r: &Result<Usage, FetchError>, since_wake: Option<i64>) -> u64 {
     match r {
         Ok(_) => POLL_OK_SECS,
         Err(FetchError::RateLimited) => POLL_RATE_LIMITED_SECS,
+        // Offline/HTTP errors right after a wake: the network is probably reconnecting.
+        Err(FetchError::Other(_)) if since_wake.is_some_and(|s| (0..WAKE_WINDOW_SECS).contains(&s)) => WAKE_RETRY_SECS,
         Err(_) => POLL_RETRY_SECS,
     }
 }
@@ -84,7 +87,18 @@ mod tests {
         assert!(matches!(classify(401, ""), Err(FetchError::Auth(_))));
         assert_eq!(classify(429, ""), Err(FetchError::RateLimited));
         assert_eq!(classify(500, ""), Err(FetchError::Other("HTTP 500".into())));
-        assert_eq!(next_poll_secs(&classify(429, "")), POLL_RATE_LIMITED_SECS);
-        assert_eq!(next_poll_secs(&classify(200, ok)), POLL_OK_SECS);
+        assert_eq!(next_poll_secs(&classify(429, ""), None), POLL_RATE_LIMITED_SECS);
+        assert_eq!(next_poll_secs(&classify(200, ok), Some(1)), POLL_OK_SECS);
+    }
+
+    #[test]
+    fn retries_fast_after_wake() {
+        let offline: Result<Usage, FetchError> = Err(FetchError::Other("offline".into()));
+        assert_eq!(next_poll_secs(&offline, None), POLL_RETRY_SECS);
+        assert_eq!(next_poll_secs(&offline, Some(3)), WAKE_RETRY_SECS);
+        assert_eq!(next_poll_secs(&offline, Some(WAKE_WINDOW_SECS)), POLL_RETRY_SECS);
+        assert_eq!(next_poll_secs(&classify(429, ""), Some(3)), POLL_RATE_LIMITED_SECS, "never hammer a 429");
+        let auth = Err(FetchError::Auth("token expired, run claude".into()));
+        assert_eq!(next_poll_secs(&auth, Some(3)), POLL_RETRY_SECS, "waiting won't fix auth");
     }
 }

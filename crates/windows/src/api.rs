@@ -33,7 +33,7 @@ fn http_get(token: &str) -> Result<(u32, String), String> {
         }
         WinHttpSetTimeouts(session.0, 10_000, 10_000, 15_000, 15_000);
         let host = wide(fetch::HOST);
-        let conn = Handle(WinHttpConnect(session.0, host.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT as u16, 0));
+        let conn = Handle(WinHttpConnect(session.0, host.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT, 0));
         if conn.0.is_null() {
             return Err("offline".into());
         }

@@ -12,7 +12,7 @@ mod output;
 
 use cache::Shared;
 use claude_quota_core::fetch::{self, next_poll_secs};
-use claude_quota_core::{now_secs, MIN_MANUAL_REFRESH_SECS};
+use claude_quota_core::{now_secs, WakeDetector, MIN_MANUAL_REFRESH_SECS};
 use output::Style;
 use std::io::Write;
 use std::time::Duration;
@@ -26,30 +26,33 @@ usage: claude-quota-waybar [--once | --refresh] [--compact] [--plain]
   --compact   percentages and reset times only, no segment bars
   --plain     no Pango colours; style the module from CSS classes instead";
 
-fn is_due(cur: Option<&Shared>, now: i64) -> bool {
-    match cur {
-        None => true,
-        Some(c) => now >= c.next_at || (cache::refresh_requested() && now - c.fetched_at >= MIN_MANUAL_REFRESH_SECS as i64),
-    }
+fn is_due(cur: Option<&Shared>, now: i64, woke_at: Option<i64>) -> bool {
+    let Some(c) = cur else { return true };
+    let since_last = now - c.fetched_at;
+    now >= c.next_at
+        || (cache::refresh_requested() && since_last >= MIN_MANUAL_REFRESH_SECS as i64)
+        // Woke up and nobody has fetched since. Every instance notices the wake within ~1 s,
+        // so a fetch from just before our own detection counts.
+        || woke_at.is_some_and(|w| c.fetched_at < w - 2 && since_last >= MIN_MANUAL_REFRESH_SECS as i64)
 }
 
 /// Fetches if due (only one instance at a time does), then returns the shared state.
-fn tick(now: i64) -> Option<Shared> {
+fn tick(now: i64, woke_at: Option<i64>) -> Option<Shared> {
     let cur = cache::load();
-    if !is_due(cur.as_ref(), now) {
+    if !is_due(cur.as_ref(), now, woke_at) {
         return cur;
     }
     let Some(_lock) = cache::Lock::acquire() else {
         return cur; // another instance is fetching; pick up its result next tick
     };
     let cur = cache::load(); // it may have just finished
-    if !is_due(cur.as_ref(), now) {
+    if !is_due(cur.as_ref(), now, woke_at) {
         return cur;
     }
     let r = fetch::fetch_usage(http::get);
     let next = Shared {
         fetched_at: now,
-        next_at: now + next_poll_secs(&r) as i64,
+        next_at: now + next_poll_secs(&r, woke_at.map(|w| now - w)) as i64,
         usage: r.as_ref().ok().copied().or(cur.and_then(|c| c.usage)),
         error: r.err().map(|e| e.message()),
     };
@@ -85,9 +88,14 @@ fn main() {
 
     let mut out = std::io::stdout().lock();
     let mut last = String::new();
+    let mut wake = WakeDetector::new();
+    let mut woke_at = None;
     loop {
         let now = now_secs();
-        let line = output::render(tick(now).as_ref(), now, style);
+        if wake.check() {
+            woke_at = Some(now);
+        }
+        let line = output::render(tick(now, woke_at).as_ref(), now, style);
         if line != last {
             // Waybar closed the pipe (reload/quit): exit instead of spinning.
             if writeln!(out, "{line}").and_then(|_| out.flush()).is_err() {
