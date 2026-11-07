@@ -1,5 +1,5 @@
 //! Platform-independent logic: parsing the usage payload, time maths, formatting.
-//! Everything here is unit-tested (`cargo test --target x86_64-unknown-linux-gnu`).
+//! Everything here is unit-tested (`cargo test -p claude-quota-core`).
 
 use serde_json::Value;
 
@@ -104,6 +104,19 @@ pub fn format_remaining(secs: i64) -> String {
     }
 }
 
+/// "2d 5h", "3h 12m", "42m" — for tooltips.
+pub fn format_remaining_long(secs: i64) -> String {
+    let secs = secs.max(0);
+    let (d, h, m) = (secs / 86400, secs % 86400 / 3600, secs % 3600 / 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
+    }
+}
+
 /// Text on the right of a bar: "36% · 3h".
 pub fn format_limit(l: &Limit, now: i64) -> String {
     match l.resets_at {
@@ -157,6 +170,9 @@ mod tests {
         assert_eq!(format_remaining(59 * 60), "59m");
         assert_eq!(format_remaining(3 * 3600 + 1799), "3h");
         assert_eq!(format_remaining(3 * 86400 + 5), "3d");
+        assert_eq!(format_remaining_long(2 * 86400 + 5 * 3600 + 59), "2d 5h");
+        assert_eq!(format_remaining_long(3 * 3600 + 12 * 60 + 5), "3h 12m");
+        assert_eq!(format_remaining_long(42 * 60), "42m");
     }
 
     #[test]

@@ -1,0 +1,23 @@
+/* Append to ~/.config/waybar/style.css and adjust to your theme. */
+#custom-claude {
+    padding: 0 10px;
+    color: #b9b9b9;
+}
+
+#custom-claude.warn {
+    color: #e0a030;
+}
+
+#custom-claude.critical {
+    color: #d9473f;
+}
+
+/* Latest refresh failed; the last good numbers are still shown. */
+#custom-claude.stale {
+    border-left: 2px solid #e0a030;
+}
+
+#custom-claude.error,
+#custom-claude.loading {
+    color: #808080;
+}

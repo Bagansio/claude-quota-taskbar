@@ -6,20 +6,41 @@ on:
   pull_request:
 
 jobs:
-  build:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build --release -p claude-quota-waybar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-quota-waybar
+          path: target/release/claude-quota-waybar
+
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo test -p claude-quota-core
+      - run: cargo build --release -p claude-quota-taskbar
       - uses: actions/upload-artifact@v4
         with:
           name: claude-quota-taskbar
           path: target/release/claude-quota-taskbar.exe
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/release/claude-quota-taskbar.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Name the Linux binary
+        run: mv claude-quota-waybar/claude-quota-waybar claude-quota-waybar-x86_64-linux
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            claude-quota-taskbar/claude-quota-taskbar.exe
+            claude-quota-waybar-x86_64-linux

@@ -2,8 +2,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #![cfg_attr(not(windows), allow(dead_code))]
 
-mod model;
-
 #[cfg(windows)]
 mod api;
 #[cfg(windows)]
@@ -18,20 +16,23 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("claude-quota-taskbar only runs on Windows");
+    eprintln!("claude-quota-taskbar only runs on Windows; on Linux use claude-quota-waybar");
 }
 
 #[cfg(windows)]
 mod app {
-    use crate::api::{self, wide, FetchError};
+    use crate::api::{self, wide};
     use crate::{render, state};
+    use claude_quota_core::fetch::next_poll_secs;
+    use claude_quota_core::{now_secs, WakeDetector, MIN_MANUAL_REFRESH_SECS};
     use std::mem::zeroed;
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering::Relaxed};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::Graphics::Gdi::*;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::RemoteDesktop::{WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION};
     use windows_sys::Win32::System::Threading::CreateMutexW;
     use windows_sys::Win32::UI::HiDpi::*;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
@@ -42,12 +43,14 @@ mod app {
     const TIMER_TOPMOST: usize = 2;
     const CMD_REFRESH: usize = 1;
     const CMD_QUIT: usize = 2;
-    /// Poll gently: the endpoint is undocumented and rate-limits aggressively.
-    const POLL_OK: u64 = 180;
-    const POLL_RATE_LIMITED: u64 = 300;
-    const POLL_RETRY: u64 = 60;
 
     static REFRESH: AtomicBool = AtomicBool::new(false);
+    /// Set on resume from sleep or session unlock: refetch now and retry quickly while offline.
+    static WOKE: AtomicBool = AtomicBool::new(false);
+    // wParam values (defined locally; they are plain numbers in the Win32 headers).
+    const WTS_SESSION_UNLOCK: usize = 0x8;
+    const PBT_APMRESUMESUSPEND: usize = 0x7;
+    const PBT_APMRESUMEAUTOMATIC: usize = 0x12;
     static DRAGGING: AtomicBool = AtomicBool::new(false);
     static DRAG_DX: AtomicI32 = AtomicI32::new(0);
     static TASKBAR_LEFT: AtomicI32 = AtomicI32::new(0);
@@ -61,10 +64,6 @@ mod app {
 
     fn scale() -> f32 {
         f32::from_bits(SCALE_BITS.load(Relaxed))
-    }
-
-    fn now_secs() -> i64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
     }
 
     fn offset_file() -> Option<std::path::PathBuf> {
@@ -182,6 +181,20 @@ mod app {
             SetTimer(hwnd, TIMER_TOPMOST, 250, None);
             TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()), Relaxed);
 
+            // Power and session notifications only reach top-level windows, and the widget is a
+            // child of the taskbar: listen on a separate hidden one.
+            let pclass = wide("ClaudeQuotaTaskbarPower");
+            let mut pwc: WNDCLASSEXW = zeroed();
+            pwc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
+            pwc.lpfnWndProc = Some(power_wndproc);
+            pwc.hInstance = hinst;
+            pwc.lpszClassName = pclass.as_ptr();
+            RegisterClassExW(&pwc);
+            let power = CreateWindowExW(WS_EX_TOOLWINDOW, pclass.as_ptr(), null(), WS_POPUP, 0, 0, 0, 0, null_mut(), null_mut(), hinst, null());
+            if !power.is_null() {
+                WTSRegisterSessionNotification(power, NOTIFY_FOR_THIS_SESSION);
+            }
+
             std::thread::spawn(fetch_loop);
 
             let mut msg: MSG = zeroed();
@@ -194,33 +207,58 @@ mod app {
 
     fn fetch_loop() {
         let hwnd = HWND_RAW.load(Relaxed);
+        // Backstop for resume notifications that never arrive (wall clock vs monotonic clock).
+        let mut wake = WakeDetector::new();
+        let mut woke_at: Option<i64> = None;
         loop {
             let started = Instant::now();
             let wait = {
                 let r = api::fetch_usage();
+                let wait = next_poll_secs(&r, woke_at.map(|w| now_secs() - w));
                 let mut s = state::STATE.lock().unwrap();
                 match r {
                     Ok(u) => {
                         s.usage = Some(u);
                         s.error = None;
-                        POLL_OK
                     }
-                    Err(e) => {
-                        s.error = Some(e.message());
-                        if matches!(e, FetchError::RateLimited) { POLL_RATE_LIMITED } else { POLL_RETRY }
-                    }
+                    Err(e) => s.error = Some(e.message()),
                 }
+                wait
             };
             unsafe { PostMessageW(hwnd as HWND, WM_UPDATED, 0, 0) };
-            // Sleep, waking early for a manual refresh (at most one per 15 s).
+            // Sleep, waking early for a manual refresh or a wake (at most one per 15 s; a request
+            // that comes sooner is kept and served once 15 s have passed, not dropped).
             loop {
                 std::thread::sleep(Duration::from_millis(500));
+                if wake.check() | WOKE.swap(false, Relaxed) {
+                    woke_at = Some(now_secs());
+                    REFRESH.store(true, Relaxed);
+                }
                 let age = started.elapsed();
-                if age >= Duration::from_secs(wait) || (REFRESH.swap(false, Relaxed) && age >= Duration::from_secs(15)) {
+                if age >= Duration::from_secs(wait) || (REFRESH.load(Relaxed) && age >= Duration::from_secs(MIN_MANUAL_REFRESH_SECS)) {
+                    REFRESH.store(false, Relaxed);
                     break;
                 }
             }
         }
+    }
+
+    unsafe extern "system" fn power_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        let woke = match msg {
+            WM_POWERBROADCAST => wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND,
+            WM_WTSSESSION_CHANGE => wp == WTS_SESSION_UNLOCK,
+            _ => false,
+        };
+        if woke {
+            WOKE.store(true, Relaxed);
+            // Explorer may have rebuilt or resized the taskbar meanwhile.
+            let widget = HWND_RAW.load(Relaxed) as HWND;
+            if !widget.is_null() {
+                reposition(widget);
+            }
+            return if msg == WM_POWERBROADCAST { 1 } else { 0 };
+        }
+        DefWindowProcW(hwnd, msg, wp, lp)
     }
 
     unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {

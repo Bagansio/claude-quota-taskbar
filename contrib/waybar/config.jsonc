@@ -1,0 +1,14 @@
+// Add "custom/claude" to one of your modules-left/center/right arrays, then merge this block
+// into ~/.config/waybar/config.jsonc. Assumes the binary is on $PATH (e.g. ~/.local/bin).
+{
+    "custom/claude": {
+        "exec": "claude-quota-waybar",
+        "return-type": "json",
+        "restart-interval": 30,
+        "on-click": "claude-quota-waybar --refresh",
+        "tooltip": true
+        // Smaller: "exec": "claude-quota-waybar --compact"
+        // Crowded bar: "exec": "claude-quota-waybar --slim"
+        // Theme purely from CSS: "exec": "claude-quota-waybar --plain"
+    }
+}
